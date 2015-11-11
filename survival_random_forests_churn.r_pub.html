@@ -1,0 +1,440 @@
+<p>#Setup your R environment </p>
+
+<p>Be sure to change your directory:</p>
+
+<pre><code class="r">
+setwd(&quot;d:/survival&quot;)
+
+</code></pre>
+
+<p>Load (and install if necessary) the required libraries (but see below special requirement about the randomForestSRC library). </p>
+
+<pre><code class="r, echo=TRUE, results=&#39;hide&#39;">
+list.of.packages &lt;- c(&quot;survival&quot;, 
+                      &quot;caret&quot;,
+                      &quot;glmnet&quot;,
+                      &quot;rms&quot;,
+                      &quot;doParallel&quot;,
+                      &quot;risksetROC&quot;)
+
+new.packages &lt;- list.of.packages[!(list.of.packages %in% installed.packages()[,&quot;Package&quot;])]
+if(length(new.packages)) install.packages(new.packages)
+
+library(survival, quietly = TRUE)
+library(caret, quietly = TRUE)
+library(glmnet, quietly = TRUE)
+library(rms, quietly = TRUE)
+library(risksetROC, quietly = TRUE)
+
+library(doParallel, quietly = TRUE)                    
+registerDoParallel(detectCores() - 1 )  ## registerDoMC( detectCores()-1 ) in Linux
+
+detectCores()
+options(rf.cores = detectCores() - 1, 
+        mc.cores = detectCores() - 1)  ## Cores for parallel processing
+
+
+</code></pre>
+
+<p>Read more about <a href="https://cran.r-project.org/web/packages/doParallel/vignettes/gettingstartedParallel.pdf">doParallel</a>.</p>
+
+<p>By default, doParallel uses multicore functionality on Unix-like systems and snow functionality on Windows. Note that the multicore functionality only runs tasks on a single computer, not a cluster of computers.</p>
+
+<p>randomForestSRC package allows parallelization but the library binaries are different for Windows and Linux, so you must go to <a href="http://www.ccs.miami.edu/%7Ehishwaran/rfsrc.html">Hemant Ishwaran&#39;s rfsrc page</a> and download the zip file and install it as source.</p>
+
+<p>My system is a windows 7 machine, so I am using that zip. Use the appropriate one for your platform. Let&#39;s also check it loads. </p>
+
+<pre><code class="r">
+install.packages(&quot;http://www.ccs.miami.edu/~hishwaran/rfsrc/randomForestSRC_1.6.0.zip&quot;, 
+                 repos = NULL, 
+                 type = &quot;source&quot;)
+
+library(randomForestSRC)
+
+</code></pre>
+
+<p>And only after this you can install ggRandomForests, with very useful plotting functions for the random forests objects created with randomForestSRC.</p>
+
+<pre><code class="r">
+install.packages(&quot;ggRandomForests&quot;, 
+                 repos = &#39;http://cran.us.r-project.org&#39;) #since you had source before
+library(ggRandomForests)
+
+</code></pre>
+
+<h1>Load and explore the data</h1>
+
+<p>I found these churn Datasets suggested at </p>
+
+<p><a href="http://stackoverflow.com/questions/27080207/survival-analysis-for-telecom-churn-using-r">http://stackoverflow.com/questions/27080207/survival-analysis-for-telecom-churn-using-r</a></p>
+
+<p>Churn data (artificial based on claims similar to real world). Data are part of UCI machine learning training sets, also more quickly found at<a href="http://www.sgi.com/tech/mlc/db/">http://www.sgi.com/tech/mlc/db/</a></p>
+
+<pre><code class="r">
+
+nm &lt;- read.csv(&quot;http://www.sgi.com/tech/mlc/db/churn.names&quot;, 
+               skip = 4, 
+               colClasses = c(&quot;character&quot;, &quot;NULL&quot;), 
+               header = FALSE, 
+               sep = &quot;:&quot;)[[1]]
+
+dat &lt;- read.csv(&quot;http://www.sgi.com/tech/mlc/db/churn.data&quot;, 
+                header = FALSE, 
+                col.names = c(nm, &quot;Churn&quot;),
+                colClasses = c(&quot;factor&quot;,
+                               &quot;numeric&quot;,
+                               &quot;factor&quot;,
+                               &quot;character&quot;,
+                               rep(&quot;factor&quot;, 2),
+                               rep(&quot;numeric&quot;, 14),
+                               &quot;factor&quot;))
+
+
+# test data
+
+test &lt;- read.csv(&quot;http://www.sgi.com/tech/mlc/db/churn.test&quot;, 
+                header = FALSE, 
+                col.names = c(nm, &quot;Churn&quot;),
+                colClasses = c(&quot;factor&quot;,
+                               &quot;numeric&quot;,
+                               &quot;factor&quot;,
+                               &quot;character&quot;,
+                               rep(&quot;factor&quot;, 2),
+                               rep(&quot;numeric&quot;, 14),
+                               &quot;factor&quot;))
+
+</code></pre>
+
+<p>This is a quick exploration of training dataset. You have 3333 unique customer id&#39;s (phone numbers), account.length is the age (time dimension), which seems to be months, but I am not totally sure, and you have 15% drop-outs, which is a quite high churn rate but then consider we have &gt;10 years span.</p>
+
+<pre><code class="r">dim(dat)
+summary(dat)
+length(unique(dat$phone.number))
+hist(dat$account.length)
+table(dat$Churn)/nrow(dat)*100
+
+</code></pre>
+
+<p>And about the test set. You have exactly 1667 rows, exactly half of the training set.</p>
+
+<pre><code class="r">summary(test);dim(test)
+</code></pre>
+
+<h1>Random Forests</h1>
+
+<p>Random Forests (RF) is a machine learning technique which builds a large number of decision trees that:</p>
+
+<ul>
+<li>are based on bootstrap samples. Each tree is based on a random sample with replacement of all observations.</li>
+<li>each tree division is based on a random sample of predictors.</li>
+<li>There is no prunning, trees are as long as possible, they are not &ldquo;cut&rdquo;</li>
+</ul>
+
+<p>For building each RF tree a part of the observations is not used(37% aprox.). This is called out-of-bag -OOB- sample and is used for a honest estimate of the model predictive capability.</p>
+
+<p>Random Survival Forest (RSF) es la extensiÃ³n de RF para datos de 
+supervivencia
+â€¢ Propiedades de Random Forest
+â€“ Analiza eficientemente un gran nÃºmero de variables, sin tener que 
+hacer selecciÃ³n previa
+â€“ Es un mÃ©todo no paramÃ©trico, ya que no hace supuestos sobre el 
+modelo. Puede incorporar relaciones no linealese interacciones
+â€“ En supervivencia, no asume el principio de riesgos proporcionales
+â€¢ Random Forest tiene dos parÃ¡metros de tuning: el nÃºmero de Ã¡rboles y el 
+nÃºmero de predictores que son evaluados en cada divisiÃ³n</p>
+
+<p>La construcciÃ³n de cada Ã¡rbol de RSF se basa en el particionamiento 
+recursivo, donde cada nodo es dividido en dos nodos hijos, seleccionando el 
+predictor que maximiza la diferencia en supervivenciaen los nodos hijos
+â€¢ Test log-rank
+â€“ El test log-rank es el mÃ©todo estÃ¡ndar para evaluar si hay diferencias 
+significativasen la funciÃ³n de supervivencia entre dos o mÃ¡s grupos
+â€“ En cada nodo, se calcula el estadÃ­stico del test log-rank para todos 
+los predictores evaluados en esa particiÃ³n 
+â€¢ Todos los puntos de corte posibles de los predictores continuos
+â€¢ Todas las combinaciones de categorÃ­as en los predictores categÃ³ricos
+â€“ Se elige como mejor particiÃ³n la que generan el predictor y el punto de 
+corte con el mÃ¡ximo estadÃ­stico del test </p>
+
+<p>Se suele establecer un nÃºmero mÃ­nimo de eventos en los nodos terminales
+40 Supervivencia. Alta Dimensionalidad
+Random Survival Forest. Predicciones
+â€¢ En RSF, se estiman la funciÃ³n de supervivencia y la funciÃ³n de riesgo 
+acumulado(â€œcumulative hazardâ€) para cada observaciÃ³n (Kaplan-Meir)
+â€“ En primer lugar, se estiman en los nodos terminales de cada Ã¡rbol 
+â€“ DespuÃ©s, se promedianlos valores de estas funciones en todos los Ã¡rboles</p>
+
+<p>Para establecer en RSF una predicciÃ³n numÃ©rica por observaciÃ³n se 
+suma la funciÃ³n de riesgo acumulada en todos los tiempos
+â€“ Es equivalente a un risk score, cuyos valores mÃ¡s altos corresponden a las 
+observaciones con mayor riesgo, con peor supervivencia
+â€¢ Las predicciones para cada observaciÃ³n, se pueden basar en todos los 
+Ã¡rboles o solo en los que no participÃ³ en su construcciÃ³n (OOB sample)
+â€“ OOB ensemble cumulative hazard estimator
+â€¢ En RSF, se define la Tasa de Error = 1 â€“ C-index</p>
+
+<p>Importancia de las Variables
+â€“ La estimaciÃ³n del error estÃ¡ basada en la muestra OOB
+â€“ Para evaluar la importancia de la variable X, se permutan 
+aleatoriamente los valores de esa variable en la muestra OOB, y se 
+vuelve a calcular el error
+â€“ La Importancia de la variable (VIMP) se define como la diferencia entre 
+esos dos errores promediada sobre todos los Ã¡rboles 
+â€¢ Si el error aumenta al permutar los valores de la variable significa que esa 
+variable es importante, ya que se obtenÃ­a un error menor con los valores 
+observados</p>
+
+<p>El coste computacional es alto
+â€“ Se permutan los valores de todas las variables en todos los Ã¡rboles
+â€“ Para establecer adecuadamente la importancia de las variables en el modelo, hay 
+que valorar el uso de un nÃºmero grande de Ã¡rboles, para que todas las variables 
+tenga la oportunidad de participar en la construcciÃ³n de bastantes Ã¡rboles
+42 Supervivencia. Alta Dimensionalidad
+Random Forest en R
+â€¢ El paquete randomForest es el paquete habitual que se ha usado en R para 
+construir modelos de Random Forest para problemas de clasificaciÃ³ny 
+regresiÃ³n
+â€¢ El paquete randomSurvivalForestes el que se usaba para problemas de 
+supervivencia, pero ya no se mantiene </p>
+
+<p>El paquete randomForestSRCes el nuevo paquete que integra los 2 
+anteriores, y por tanto permite construir modelos de clasificaciÃ³n, 
+regresiÃ³n y supervivencia
+â€“ Permite paralelizaciÃ³n
+â€¢ El paquete ggRandomForestses un paquete que permite explorar los 
+modelos construidos
+â€“ Extrae los objetos generados por randomForestSRCy genera grÃ¡ficos con el 
+paquete ggplot2, pudiÃ©ndose usar los comandos de este paquete para modificar 
+los grÃ¡ficos</p>
+
+<p>La funciÃ³n rfsrc() se usa para construir un modelo de Random Forest<br/>
+â€¢ ParÃ¡metros
+â€“ formula :  formula con la variable respuesta y los predictores
+â€“ data : data frame que contiene los datos
+â€“ ntree:  nÃºmero de Ã¡rboles
+â€“ mtry:  nÃºmero de variables que entran como candidatas en cada divisiÃ³n 
+Por defecto: sqrt(p) en clasificaciÃ³n y supervivencia y p/3 en regresiÃ³n
+â€“ nodesize : nÃºmero mÃ­nimo de observaciones en un nodo terminal (survival, 3) 
+â€“ nsplit : nÃºmero de puntos aleatorios a explorar en los predictores continuos
+â€“ importance = T : mÃ©todo para calcular la importancia de las variables
+Poned importance=â€œnoneâ€ si no se desea usar
+â€“ proximity = T : para calcular la matriz de proximidades entre observaciones</p>
+
+<p>rfsrc requires all data to be either numeric or factors.</p>
+
+<p>See error:
+Error in finalizeData(c(yvar.names, xvar.names), data, na.action, miss.flag) : 
+  data types cannot be character: please convert all characters to factors</p>
+
+<p>In particular we must take out phone number. We also know that state does not predict anything.</p>
+
+<pre><code class="r">
+dat$phone.number &lt;- NULL
+dat$state &lt;- NULL
+dat$area.code &lt;- NULL
+
+dat$international.plan &lt;- as.numeric(dat$international.plan) - 1
+
+dat$voice.mail.plan &lt;- as.numeric(dat$voice.mail.plan) - 1
+
+dat$Churn &lt;- as.numeric(dat$Churn) - 1
+
+summary(dat)
+
+</code></pre>
+
+<p>Issues with factors</p>
+
+<ol>
+<li>Families</li>
+</ol>
+
+<p>There are four families of random forests:
+regression forests for continuous responses
+classification forests for factor responses
+Survival forests for right-censored survival settings
+competing risk survival forests for competing risk scenarios</p>
+
+<ol>
+<li>Allowable data types and issues related to factors</li>
+</ol>
+
+<p>Data types must be real valued, integer, factor or logical â€“however all except factors are
+coerced and treated as if real valued. For ordered factors, splits are similar to real valued
+variables.   </p>
+
+<p>If the factor is unordered, a split will move a subset of the levels in the parent
+node to the left daughter, and the complementary subset to the right daughter.<br/>
+All possible complementary pairs are considered and apply to factors with an unlimited number of levels. However, there is an optimization check to ensure that the number of splits attempted is not greater than the number of cases in a node (this internal check will override the nsplit value in random splitting mode if nsplit is large enough; see below for information about nsplit)</p>
+
+<pre><code class="r">
+out.rsf.1 &lt;- rfsrc(Surv(account.length, Churn) ~ . , 
+                   data = dat,
+                   ntree = 50, 
+                   nsplit = 2)
+
+out.rsf.1
+
+</code></pre>
+
+<p>El objeto $importance contiene la importancia de las variables, en el mismo orden 
+en que aparecen en el dataframe. Utilizamos la funciÃ³n sort() para ordenarlas</p>
+
+<pre><code class="r">
+imp.rsf.1 &lt;- sort(out.rsf.1$importance, 
+                  decreasing = T)
+
+imp.rsf.1
+
+plot(gg_vimp(out.rsf.1))
+
+
+</code></pre>
+
+<p>Let&#39;s check C-index</p>
+
+<h2>PredicciÃ³n. Suma de la funciÃ³n de Riesgo</h2>
+
+<pre><code class="r">
+length( out.rsf.1$predicted.oob )
+
+head( out.rsf.1$predicted.oob )
+
+sum.chf.oob = apply ( out.rsf.1$chf.oob , 1, sum ) 
+
+head ( sum.chf.oob )
+
+## OOB Error = 1 â€“ C-index
+rcorr.cens(out.rsf.1$predicted.oob, 
+           Surv(dat$account.length, dat$Churn))[&quot;C Index&quot;]
+
+err.rate.rsf = out.rsf.1$err.rate [ out.rsf.1$ntree ]
+err.rate.rsf
+
+## C-index ( Mayor supervivencia se relaciona con menor riesgo )  
+rcorr.cens(- out.rsf.1$predicted.oob, 
+           Surv(dat$account.length, dat$Churn))[&quot;C Index&quot;]
+
+</code></pre>
+
+<p>Para establecer el nÃºmero de Ã¡rboles Ã³ptimo, utilizamos la opciÃ³n importance=â€œnoneâ€ para que no estime la importancia de las variables y el coste computacional sea menor
+â€¢ Usamos la funciÃ³n gg_error() del paquete ggRandomForests
+â€¢ El OOB Error Rate converge a partir de un nÃºmero de Ã¡rboles entre 1500 y 2000  </p>
+
+<pre><code class="r">
+out.rsf.3 &lt;- rfsrc( Surv(account.length, Churn) ~ . , 
+                   data = dat, 
+                   ntree = 200, 
+                   importance = &quot;none&quot;, 
+                   nsplit = 1)
+out.rsf.3
+
+## GrÃ¡fico del OOB Error frente al nÃºmero de Ã¡rboles
+plot( gg_error ( out.rsf.3 ) )
+
+</code></pre>
+
+<p>Aplicado a test</p>
+
+<p>Remember, make same mods to test set!!!
+Avoid
+Error in generic.predict.rfsrc(object, newdata, importance = importance,  : 
+  x-variable factors from test data do not match original training data</p>
+
+<pre><code class="r">
+test$phone.number &lt;- NULL
+test$state &lt;- NULL
+test$area.code &lt;- NULL
+
+test$international.plan &lt;- as.numeric(test$international.plan) - 1
+
+test$voice.mail.plan &lt;- as.numeric(test$voice.mail.plan) - 1
+
+test$Churn &lt;- as.numeric(test$Churn) - 1
+
+summary(test)
+
+</code></pre>
+
+<pre><code class="r">
+pred.test.fin = predict( out.rsf.3, 
+                         newdata = test, 
+                         importance = &quot;none&quot; )
+
+rcorr.cens(- pred.test.fin$predicted , 
+             Surv(test$account.length, test$Churn))[&quot;C Index&quot;]
+
+</code></pre>
+
+<p>risksetROC</p>
+
+<p>at median time</p>
+
+<pre><code class="r">
+w.ROC = risksetROC(Stime = dat$account.length,  
+                   status = dat$Churn, 
+                   marker = out.rsf.3$predicted.oob, 
+                   predict.time = median(dat$account.length), 
+                   method = &quot;Cox&quot;, 
+                   main = paste(&quot;OOB Survival ROC Curve at t=&quot;, 
+                                median(dat$account.length)), 
+                   lwd = 3, 
+                   col = &quot;red&quot; )
+
+w.ROC$AUC
+
+</code></pre>
+
+<p>check AUC across time</p>
+
+<pre><code class="r">
+w.ROC = risksetAUC(Stime = dat$account.length,  
+                   status = dat$Churn, 
+                   marker = out.rsf.3$predicted.oob,
+                   tmax = 250)
+
+</code></pre>
+
+<p>check AUC for test</p>
+
+<pre><code class="r">
+w.ROC = risksetAUC(Stime = test$account.length,  
+                   status = test$Churn, 
+                   marker = pred.test.fin$predicted, 
+                   tmax = 220, 
+                   method = &quot;Cox&quot;)
+
+</code></pre>
+
+<p>And with a plot, at good local maximum prediction time, 190.</p>
+
+<pre><code class="r">
+w.ROC = risksetROC(Stime = test$account.length,  
+                   status = test$Churn, 
+                   marker = pred.test.fin$predicted, 
+                   predict.time = 190, 
+                   method = &quot;Cox&quot;, 
+                   main = paste(&quot;OOB Survival ROC Curve at t=190&quot;), 
+                   lwd = 3, 
+                   col = &quot;red&quot; )
+
+w.ROC$AUC
+
+</code></pre>
+
+<p>And with a plot, at maybe best prediction time, 220.</p>
+
+<pre><code class="r">
+w.ROC = risksetROC(Stime = test$account.length,  
+                   status = test$Churn, 
+                   marker = pred.test.fin$predicted, 
+                   predict.time = 220, 
+                   method = &quot;Cox&quot;, 
+                   main = paste(&quot;OOB Survival ROC Curve at t=220&quot;), 
+                   lwd = 3, 
+                   col = &quot;red&quot; )
+
+w.ROC$AUC
+
+</code></pre>
+
