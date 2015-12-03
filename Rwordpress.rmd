@@ -34,8 +34,6 @@ Usa el código siguiente pero ten en cuenta que tendrás que poner tu password y l
 ```{r}
 options(WordpressLogin = c(your.username = 'your.password'), 
         WordpressURL = 'https://your-wordpress-site.com/xmlrpc.php')
-options(WordpressLogin = c(pedroconcejero = 'rwa0sa0'), 
-        WordpressURL = 'https://pedroconcejero.wordpress.com/xmlrpc.php')
 ```
 
 El paquete “RWordpress” proporciona un montonazo de funciones para acceder o manejar tu blog. Por ejemplo es muy interesante getRecentPostTitles que recuperan metadatos de tu blog. Recuerda que WordPress distingue entre páginas y entradas de blog (por ejemplo función getPage para las primeras).
