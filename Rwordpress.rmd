@@ -1,0 +1,83 @@
+Esta entrada pretende contar cómo subir contenido a wordpress directamente desde R, como este mismo artículo. Utiliza knitr y la excelente implementación de markdown en RStudio. No estoy inventando nada, sólo adaptando lo recogido en dos tutoriales:
+
+[http://rstudio-pubs-static.s3.amazonaws.com/3265_a7da419fd69245d4b1565ee8c982346f.html](http://rstudio-pubs-static.s3.amazonaws.com/3265_a7da419fd69245d4b1565ee8c982346f.html)
+[http://francojc.github.io/publishing-rmarkdown-to-wordpress-or-jekyll/](http://francojc.github.io/publishing-rmarkdown-to-wordpress-or-jekyll/)
+
+Más antiguo pero que incluye cómo tratar imágenes (ojo no lo he probado)
+
+[http://www.carlboettiger.info/2012/02/27/using-knitr-and-rwordpress-to-publish-results-directly-from-r-6.html](http://www.carlboettiger.info/2012/02/27/using-knitr-and-rwordpress-to-publish-results-directly-from-r-6.html)
+
+1. Instala el paquete RWordPress y alguna otra librería necesaria
+
+La librería que vamos a usar es RWordPress.Si no lo tienes en tu equipo lo puedes instalar desde aquí (ojo, no está en CRAN, tienes que poner la URL). También necesitaremos knitr que, si no la tienes instalads ya en tu equipo, la puedes instalar desde CRAN.
+
+```{r}
+if (!require(RWordPress)) {
+    install.packages("RWordPress", repos = "http://www.omegahat.org/R")
+}
+if (!require(knitr)) {
+    install.packages("knitr")
+}
+if (!require(knitr)) {
+    install.packages("markdown")
+}
+library(RWordPress)
+library(knitr)
+library(markdown)
+```
+
+
+2. Conecta a tu Wordpress
+
+Usa el código siguiente pero ten en cuenta que tendrás que poner tu password y la dirección de tu blog wordpress (tu URL). De esta manera las declaras como opciones globales y luego las podrás recuperar con getOption.
+
+```{r}
+options(WordpressLogin = c(your.username = 'your.password'), 
+        WordpressURL = 'https://your-wordpress-site.com/xmlrpc.php')
+options(WordpressLogin = c(pedroconcejero = 'rwa0sa0'), 
+        WordpressURL = 'https://pedroconcejero.wordpress.com/xmlrpc.php')
+```
+
+El paquete “RWordpress” proporciona un montonazo de funciones para acceder o manejar tu blog. Por ejemplo es muy interesante getRecentPostTitles que recuperan metadatos de tu blog. Recuerda que WordPress distingue entre páginas y entradas de blog (por ejemplo función getPage para las primeras).
+
+
+```{r}
+getRecentPostTitles(num = 100, 
+                    blogid = 0L,
+                    login = getOption("WordpressLogin", stop("need a login and password")),
+                   .server = getOption("WordpressURL"))
+```
+
+
+3.  Compilamos el fichero R markdown y lo subimos al blog
+
+Podríamos pensar que usando knit2html podríamos subir directamente la página a WordPress, pero un blog de WordPress no entiende todo el html. En este tutorial nos proponen la siguiente función para pre-procesar el html antes de subirlo al blog. Aquí he encontrado muchas discrepancias entre distintos tutoriales, y la verdad yo me decanto por [este tutorial que me ha funcionado bien](http://francojc.github.io/publishing-rmarkdown-to-wordpress-or-jekyll/)
+
+Vamos a intentarlo con este mismo fichero, que por cierto podéis conseguir en [mi github](https://github.com/pedroconcejero/survival). 
+
+NOTA IMPORTANTE: En mi equipo (un windows) tengo puesto en RStudio la opción de que guarde ficheros en UTF-8. Pues bien, parece ser que para que respete caracteres con acento o ñ necesitas decirle a RStudio que guarde como windows-1252 (Save with encoding). Probablemente usuarios de otros sistemas operativos no necesiten hacer eso.
+
+NOTA MÁS IMPORTANTE TODAVÍA: Ni se te ocurra ejecutar lo que viene a continuación desde el mismo Rmd, a no ser que tengas puesto el eval=FALSE porque conseguirás generar un montonazo de entradas al blog. Aviso por experiencia. Mejor copia y pega.
+
+```{r, eval=FALSE}
+rmd.file <- "Rwordpress.rmd"
+# Knit (tejes) el fichero markdown
+knit(rmd.file)
+# Nombras los ficheros entrada / salida
+markdown.file <- gsub(pattern = "Rmd$", replacement = "md", x = rmd.file)
+html.file <- gsub(pattern = "md$", replacement = "_pub.html", x = markdown.file)
+# Quitas la info. 'yaml'
+markdownToHTML(file = markdown.file, output = html.file, fragment.only = TRUE)
+```
+
+Y ahora lo último es publicar el post usando la función newPost de RWordPress, que espera una lista de datos para la entrada al blog como el título. Si usamos publish = FALSE crearemos una entrada en borrador ("draft"), que luego podremos publicar directamente desde WordPress si comprobamos que nos gusta como queda.
+
+```{r, eval=FALSE}
+# Creas un vector de líneas con el texto
+text = paste(readLines(html.file), collapse = "\n")
+# Lo subes a wordpress con su título y como draft con publish = FALSE
+newPost(list(description = text, 
+             title = "Publica en WordPress directamente desde R"), 
+        publish = FALSE)
+```
+
