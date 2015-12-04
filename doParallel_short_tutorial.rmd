@@ -1,0 +1,71 @@
+These last few days I have had to review parallelism in R to speed up a scoring process and, as it happens maybe too often, there is simply *too much mateRial* though in general excellent. So this is my contribution with yet another tutorial -maybe it serves somebody else apart from myself. It is a quick exercise which adapts a relatively old (2012) but [excellent example from r-bloggers](http://www.r-bloggers.com/parallel-r-model-prediction-building-and-analytics/) with the last (october 2015) [vignette of doParallel and foreach](https://cran.r-project.org/web/packages/doParallel/vignettes/gettingstartedParallel.pdf). This way I also propose using a different dataset than the iris, somewhat hated by me and a [famous person in this profession](https://twitter.com/aschinchon). Let's go.
+
+First create an artificial dataset of a size you can control with the variable n. With this size (1 million) it works well in my laptop. If you increase size you should be careful with the consumption of RAM, more in particular when you try to run the process in parallel. Target (y) is a binary random variable.
+
+```{r}
+set.seed(10)
+n <- 10^6
+y  <- round(runif(n, min = 0, max = 1))
+x1 <- c(1:n)*runif(n, min = 0,max = 2)
+x2 <- c(1:n)*runif(n, min = 0,max = 2)
+x3 <- c(1:n)*runif(n, min = 0,max = 2)
+
+all_data <- data.frame(y, x1, x2, x3)
+head(all_data)
+```
+
+We divide the dataset in training and test and train a SVM model. I used the [e1071 SVM](https://cran.r-project.org/web/packages/e1071/index.html) implementation in the first attempts but even with 100k samples it was terribly slow (>10 min. and I stopped the training). [I googled about fast SVM implementations](http://stats.stackexchange.com/questions/23037/fastest-svm-implementation) and I found there is a [port of D. Sculley's Sofia algoritm into R](https://cran.r-project.org/web/packages/RSofia/index.html). Well, you cannot believe the difference, though it only does linear SVMs but with the Stochastic Gradient Descent (SGD). Since this is an exercise, it's perfect for our purposes.
+
+Nothing in parallel here. 
+
+```{r}
+positions <- sample(nrow(all_data),
+                    size = floor((nrow(all_data)/4)*3))
+training <- all_data[positions, ]
+testing <- all_data[-positions, ]
+
+library(RSofia)
+svm_fit <- sofia(y ~ x1 + x2 + x3, 
+                 data = training,
+                 learner_type = "sgd-svm")
+```
+
+Now we use the svm model to compute the predictions. Again nothing in parallel. Note we are using the specific predict.sofia function.
+
+```{r}
+system.time(predict.sofia(svm_fit, 
+                          newdata = testing,
+                          prediction_type = 'linear'))
+```
+
+Let's go parallel for the prediction. We'll use the excellent doParallel library, which has a good [vignette]( https://cran.r-project.org/web/packages/doParallel/vignettes/gettingstartedParallel.pdf).
+
+To use the parallel for (foreach) you shall call the registerDoParallelfunction, which sets up a mechanism to deploy the processes to the different cores. If you call this with no arguments, on Windows you will get 2 workers and on Unix-like systems you will get a number of workers equal to approximately half the number of cores on your system. Please note that it is very convenient that you control the number of cores with the cores parameter. A note of caution: *never specify all cores* unless you do not need the machine and are pretty sure about your process: you can really stop the machine. 
+
+```{r}
+library(doParallel)
+
+registerDoParallel(cores = 3) #in windows by default 2, in general n-1
+getDoParWorkers()
+```
+
+How are we going to organize the parallel scoring? Let's do a quick trick: divide the test dataset in three parts. Then the foreach function will send to the cores the different parts. Please note that in practice this means you multiply the objects in your RAM, you are sending at least the training objects to each of the cores. My experience with large datasets is that you can quickly fill your RAM. In those cases test before with a subset and check if you will find that problem or not.
+
+```{r}
+# useful function using modulo operation -use same as cores
+split_testing <- sort(rank(1:nrow(testing)) %% 3) 
+
+ptime <- system.time({
+          foreach(i = unique(split_testing),
+                     .combine = c,
+                     .packages = c("RSofia")) %dopar% {
+                      predict.sofia(svm_fit, 
+                          newdata = testing,
+                          prediction_type = 'linear')
+                    }
+})[3]
+ptime
+```
+
+If you observe processes in your machine (ie with taskmanager in Windows) you will see more CPU activity than with non-parallel versions. Do you really save time? Well, in this case you do, but very little. This is a conclusion that doParallel vignette also tells you: parallel processes are appropriate when the basic process is so slow that the benefit of sending the computations to multiple cores will compensate the obvious burden of the distribution into the system. I have checked with more complex scoring processes and very large objects and you can achieve time gains nearly proportional to the number of parallel computations, if you have the required RAM.
+
