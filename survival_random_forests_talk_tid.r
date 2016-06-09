@@ -19,7 +19,7 @@
 
 # Be sure to change your directory!!!!
   
-setwd("/almacen/Proyectos/MachineLearning/Survival/")
+setwd("d:/survival")
 
 # Load (and install if necessary) some required libraries 
 # (but see below special requirement about the randomForestSRC library) !!!!
@@ -35,12 +35,6 @@ list.of.packages <- c("survival",
                       "survminer",
                       "randomForestSRC",
                       "ggRandomForests")
-
-#library(party)
-#library(ROCR)
-#library(ggplot2)
-#library(survminer)
-
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
@@ -189,66 +183,101 @@ summary(dat)
 out.rsf.1 <- rfsrc(Surv(account.length, Churn) ~ . , 
                    data = dat,
                    ntree = 50, 
-                   nsplit = 2)
+                   nsplit = 1,
+                   forest = T,   # required to use vimp functions
+                   tree.err = T, # required for plotting tree error
+                   importance = T)
+
 out.rsf.1
 
+# this is a complex object containing all the info. about the input and output of model
+str(out.rsf.1)
 
-# The $importance object contains variables importance, in same order as in input dataset. 
-# We sort it out to show a ranking and use ggRandomForestses to plot this object. 
+plot(out.rsf.1)
 
-imp.rsf.1 <- sort(out.rsf.1$importance, 
-                  decreasing = T)
-imp.rsf.1
+# To obtain variable importance we can use standard vimp function (requires forest = T when growing the forest)
+# You have several ways of computing importance see manual
+# The default is Breiman-Cutler permutation VIMP
+
+vimp(out.rsf.1)
+
+var.importance <- (vimp(out.rsf.1)$importance)
+
+print(sort(var.importance, decreasing = T))
+
+# You can plot results above using standard barplot or use gg_vimp function
 
 plot(gg_vimp(out.rsf.1))
 
 
-## Predictions in RSF
-# These predictions can be based on all trees or only on the OOB sample.
 
-# We have the following predictions
-# predicted
-# predicted.oob
-# survival
-# survival.oob
+## Predictive capability in the training set
+# we use OOB data
+# and in particular predicted.oob vector 
+# contains predicted survival times for all train data
 
-summary(out.rsf.1$survival) # all values between 0 and 1
-summary(out.rsf.1$survival.oob) # same but different values
-summary(out.rsf.1$predicted) # clearly a duration - between 0 and 173
-summary(out.rsf.1$predicted.oob) # same but different values between 0 and 165
-
-# We must make a transform to make these equivalent to a risk score, 
-# so that higher values correspond to observations with higher observed risk, lower survival. 
-
+summary(out.rsf.1$predicted.oob)
 
 # In RSF, error rate is defined as = 1 – C-index
+# we use Hmisc::rcorr.cens rank correlation for censored data
+# see ?rcorr.cens
 
-## OOB Error = 1 – C-index
+## C-index
 rcorr.cens(out.rsf.1$predicted.oob, 
            Surv(dat$account.length, dat$Churn))["C Index"]
 
-err.rate.rsf = out.rsf.1$err.rate[ out.rsf.1$ntree ]
-err.rate.rsf
-
-## Inverting this amount so that the higher the better  
+## Inverting this amount so that the higher the better 
+## OOB Error = 1 – C-index
 rcorr.cens(-out.rsf.1$predicted.oob, 
            Surv(dat$account.length, dat$Churn))["C Index"]
 
 
+# This is similar to the error rate computed by the algorithm 
+# and reported in the err.rate vector -for all numbers of trees
+
+out.rsf.1$err.rate
+
+# and for the specified number of trees it is a single number:
+out.rsf.1$err.rate[ out.rsf.1$ntree ]
+
+
+
 #######################################
-# 5 Towards an optimal RFS
+# 5 Improving-optimizing RFS
+
+out.rsf.2 <- rfsrc( Surv(account.length, Churn) ~ . , 
+                    data = dat, 
+                    ntree = 70, 
+                    importance = "none", 
+                    tree.err = T,
+                    nsplit = 2)
+out.rsf.2
+plot(out.rsf.2)
 
 out.rsf.3 <- rfsrc( Surv(account.length, Churn) ~ . , 
                     data = dat, 
                     ntree = 200, 
                     importance = "none", 
+                    tree.err = T,
                     nsplit = 1)
 out.rsf.3
+plot(out.rsf.3)
 
-plot(gg_error(out.rsf.3))
+out.rsf.4 <- rfsrc( Surv(account.length, Churn) ~ . , 
+                    data = dat, 
+                    ntree = 500, 
+                    importance = "none", 
+                    tree.err = T,
+                    nsplit = 1)
+out.rsf.4
 
+# As suspectetd, not worth increasing number of trees
+# nsplit does not seem to affect
 
-## Predictive ability applied to test data: C Index
+# we will use out.rsf.3
+
+#######################################
+# 6 Predictive ability with test data: C Index
 
 # First of all, remember to make same mods as we did to the training to test set!!!
 
@@ -263,36 +292,71 @@ test$Churn <- as.numeric(test$Churn) - 1
 summary(test)
 
 
+# we predict over test set with predict function and newdata = test
+
 pred.test.fin = predict( out.rsf.3, 
                          newdata = test, 
                          importance = "none" )
+
+# Computing C index as we did with train data (inverted so we report 1-C)
 
 rcorr.cens(-pred.test.fin$predicted , 
            Surv(test$account.length, test$Churn))["C Index"]
 
 
-w.ROC = risksetROC(Stime = dat$account.length,  
-                   status = dat$Churn, 
-                   marker = out.rsf.3$predicted.oob, 
-                   predict.time = median(dat$account.length), 
-                   method = "Cox", 
-                   main = paste("OOB Survival ROC Curve at t=", 
-                                median(dat$account.length)), 
+#######################################
+# 7 Estimates of survival time and risk in test data
+
+# Remember we do not have a single risk estimate per individual as with classification models
+# We have a risk estimate *per* time moment and an estimated survival time (the lower the worse)
+
+# In pred.test.fin object we have the following vectors
+# $time.interest contains survival times when events have happened (of course right-censored)
+summary(pred.test.fin$time.interest)
+
+# $predicted has the predictions -note you have an .oob object but it is empty
+summary(pred.test.fin$predicted)
+
+# $survival contains survival estimates for each individual *at each moment in time*
+dim(pred.test.fin$survival)
+
+# We can explore survival estimates at specific moments in time
+summary(pred.test.fin$survival[, 12])
+summary(pred.test.fin$survival[, 24])
+
+# And $chf contains accumulated risk (kinda sum of risks) per individual
+# CAVEAT THIS IS NOT A PROBABILITY. The higher the worse -sum of risks
+# and as survival estimates you have one estimate per moment in time
+summary(pred.test.fin$chf)
+
+summary(pred.test.fin$chf[, 12])
+summary(pred.test.fin$chf[, 24])
+
+
+#######################################
+# 8 Survival ROC at specific moments in time using risksetROC
+# A key concept in all survival modelling is prediction along time
+
+## Survival ROC at t=10
+w.ROC = risksetROC(Stime = test$account.length, 
+                   status = test$Churn,
+                   marker = pred.test.fin$predicted, 
+                   predict.time = 10, 
+                   method = "Cox",
+                   main = "Test Survival ROC Curve at t=10", 
                    lwd = 3, 
                    col = "red" )
 
 w.ROC$AUC
 
+## Survival ROC at t=24
 
-# Let's see prediction at 12 months
-
-w.ROC = risksetROC(Stime = dat$account.length,  
-                   status = dat$Churn, 
-                   marker = out.rsf.3$predicted.oob, 
-                   predict.time = 12, 
-                   method = "Cox", 
-                   main = paste("OOB Survival ROC Curve at t=", 
-                                12), 
+w.ROC = risksetROC(Stime = test$account.length, 
+                   status = test$Churn,
+                   marker = pred.test.fin$predicted, 
+                   predict.time = 24, 
+                   method = "Cox",
+                   main = "Test Survival ROC Curve at t=10", 
                    lwd = 3, 
                    col = "red" )
 
@@ -301,19 +365,8 @@ w.ROC$AUC
 # For risksetROC to compute AUC along an interval you use risksetAUC using tmax (maximum time). 
 # You get a very nice plot of AUC across time. 
 
-# *******************This is still OOB samples.*****************************
-
-
-w.ROC = risksetAUC(Stime = dat$account.length,  
-                   status = dat$Churn, 
-                   marker = out.rsf.3$predicted.oob,
-                   main = "OOB Survival at t=250",
-                   tmax = 250)
-
-# **************Let's do the same for test data.********************
-
-w.ROC = risksetAUC(Stime = test$account.length,  
-                   status = test$Churn, 
+w.ROC = risksetAUC(Stime = test$account.length, 
+                   status = test$Churn,
                    marker = pred.test.fin$predicted, 
                    tmax = 190, 
                    method = "Cox",
@@ -321,4 +374,3 @@ w.ROC = risksetAUC(Stime = test$account.length,
                    lwd = 3, 
                    col = "red" )
 
-w.ROC$AUC
