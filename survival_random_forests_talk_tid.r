@@ -19,7 +19,7 @@
 
 # Be sure to change your directory!!!!
   
-setwd("d:/survival")
+setwd("/almacen/Proyectos/MachineLearning/Survival/")
 
 # Load (and install if necessary) some required libraries 
 # (but see below special requirement about the randomForestSRC library) !!!!
@@ -32,12 +32,14 @@ list.of.packages <- c("survival",
                       "party", 
                       "ROCR",
                       "ggplot2",
-                      "survminer")
+                      "survminer",
+                      "randomForestSRC",
+                      "ggRandomForests")
 
-library(party)
-library(ROCR)
-library(ggplot2)
-library(survminer)
+#library(party)
+#library(ROCR)
+#library(ggplot2)
+#library(survminer)
 
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
@@ -63,13 +65,13 @@ options(rf.cores = detectCores() - 1,
 # randomForestSRC package allows parallelization but the library binaries are different for Windows and Linux, 
 # so you must go to http://www.ccs.miami.edu/~hishwaran/rfsrc.html
 
-install.packages("http://www.ccs.miami.edu/~hishwaran/rfsrc/randomForestSRC_1.6.0.zip", 
-                 repos = NULL, 
-                 type = "source")
+#install.packages("http://www.ccs.miami.edu/~hishwaran/rfsrc/randomForestSRC_1.6.0.zip", 
+#                 repos = NULL, 
+#                 type = "source")
 library(randomForestSRC)
                                                                                                                             
-install.packages("ggRandomForests", 
-                 repos = 'http://cran.us.r-project.org') #since you had source before
+#install.packages("ggRandomForests", 
+#                 repos = 'http://cran.us.r-project.org') #since you had source before
 library(ggRandomForests)
 
 
@@ -290,7 +292,7 @@ w.ROC = risksetROC(Stime = dat$account.length,
                    predict.time = 12, 
                    method = "Cox", 
                    main = paste("OOB Survival ROC Curve at t=", 
-                                median(dat$account.length)), 
+                                12), 
                    lwd = 3, 
                    col = "red" )
 
@@ -305,6 +307,7 @@ w.ROC$AUC
 w.ROC = risksetAUC(Stime = dat$account.length,  
                    status = dat$Churn, 
                    marker = out.rsf.3$predicted.oob,
+                   main = "OOB Survival at t=250",
                    tmax = 250)
 
 # **************Let's do the same for test data.********************
@@ -314,7 +317,7 @@ w.ROC = risksetAUC(Stime = test$account.length,
                    marker = pred.test.fin$predicted, 
                    tmax = 190, 
                    method = "Cox",
-                   main = paste("OOB Survival ROC Curve at t=190"), 
+                   main = paste("OOB Survival ROC Curve at t=190, test data"), 
                    lwd = 3, 
                    col = "red" )
 
