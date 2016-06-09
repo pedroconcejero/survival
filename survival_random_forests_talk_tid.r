@@ -356,7 +356,7 @@ w.ROC = risksetROC(Stime = test$account.length,
                    marker = pred.test.fin$predicted, 
                    predict.time = 24, 
                    method = "Cox",
-                   main = "Test Survival ROC Curve at t=10", 
+                   main = "Test Survival ROC Curve at t=24", 
                    lwd = 3, 
                    col = "red" )
 
@@ -374,3 +374,4 @@ w.ROC = risksetAUC(Stime = test$account.length,
                    lwd = 3, 
                    col = "red" )
 
+w.ROC$AUC
